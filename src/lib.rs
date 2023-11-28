@@ -13,59 +13,79 @@ struct TextImageOptions {
     text: String,
     font: String,
     font_size: f32,
+    inverse: bool,
 }
 
 impl Parse for TextImageOptions {
     fn parse(input: ParseStream) -> Result<Self> {
-        let name: Ident = input.parse()?;
-        if name.to_string() != "text" {
-            return Err(syn::Error::new_spanned(name, "expected `text` as the first argument"));
-        }
-        input.parse::<Token![=]>()?;
-        let text: Lit = input.parse()?;
-
-        let text = if let Lit::Str(text) = &text {
-            text.value()
-        } else {
-            return Err(syn::Error::new_spanned(text, "expected a string literal"));
+        let mut opts = TextImageOptions {
+            text: "".to_string(),
+            font: "".to_string(),
+            font_size: 16.0,
+            inverse: false,
         };
 
-        input.parse::<Token![,]>()?;
-        let name: Ident = input.parse()?;
-        if name.to_string() != "font" {
-            return Err(syn::Error::new_spanned(name, "expected `font` as the second argument"));
+        loop {
+            let name: Ident = input.parse()?;
+
+            match &*name.to_string() {
+                "text" => {
+                    input.parse::<Token![=]>()?;
+                    let text: Lit = input.parse()?;
+
+                    let text = if let Lit::Str(text) = &text {
+                        text.value()
+                    } else {
+                        return Err(syn::Error::new_spanned(text, "expected a string literal"));
+                    };
+
+                    opts.text = text;
+                }
+                "font" => {
+                    input.parse::<Token![=]>()?;
+                    let font: Lit = input.parse()?;
+
+                    let font = if let Lit::Str(font) = &font {
+                        font.value()
+                    } else {
+                        return Err(syn::Error::new_spanned(font, "expected a string literal"));
+                    };
+
+                    opts.font = font;
+                }
+                "font_size" => {
+                    input.parse::<Token![=]>()?;
+                    let font_size: Lit = input.parse()?;
+
+                    let font_size = if let Lit::Float(font_size) = &font_size {
+                        font_size.base10_parse()?
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            font_size,
+                            "expected a float literal",
+                        ));
+                    };
+
+                    opts.font_size = font_size;
+                }
+                "inverse" => {
+                    opts.inverse = true;
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "expected `text`, `font`, `font_size` or `inverse`",
+                    ));
+                }
+            }
+
+            let _ = input.parse::<Token![,]>();
+            if input.is_empty() {
+                break;
+            }
         }
 
-        input.parse::<Token![=]>()?;
-        let font: Lit = input.parse()?;
-
-        let font = if let Lit::Str(font) = &font {
-            font.value()
-        } else {
-            return Err(syn::Error::new_spanned(font, "expected a string literal"));
-        };
-
-        input.parse::<Token![,]>()?;
-        let name: Ident = input.parse()?;
-        if name.to_string() != "font_size" {
-            return Err(syn::Error::new_spanned(name, "expected `font_size` as the third argument"));
-        }
-
-        input.parse::<Token![=]>()?;
-        let font_size: Lit = input.parse()?;
-
-        let font_size = if let Lit::Float(font_size) = &font_size {
-            font_size.base10_parse()?
-        } else {
-            return Err(syn::Error::new_spanned(font_size, "expected a float literal"));
-        };
-
-        let _ = input.parse::<Token![,]>();
-        Ok(TextImageOptions {
-            text,
-            font,
-            font_size,
-        })
+        Ok(opts)
     }
 }
 
@@ -83,7 +103,9 @@ impl Parse for TextImageOptions {
 ///     text = "Hello, world!哈哈这样也行",
 ///     font = "LXGWWenKaiScreen.ttf",
 ///     font_size = 48.0,
+///     inverse,
 ///   );
+///   let raw_image = ImageRaw::<Gray8>::new(raw, w);
 /// }
 ///
 /// ````
@@ -92,27 +114,63 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as TextImageOptions);
     println!("text_image: {:#?}", input);
 
-    let font = std::fs::read(input.font).unwrap();
-    let font = Font::try_from_vec(font).unwrap();
+    let font_raw = std::fs::read(input.font).unwrap();
+    let font = Font::try_from_vec(font_raw).unwrap();
 
     let scale = Scale {
         x: input.font_size,
         y: input.font_size,
     };
 
-    let (mut w, h) = text_size(scale, &font, &input.text);
+    let metric = font.v_metrics(scale);
+    let line_height = (metric.ascent - metric.descent + metric.line_gap)
+        .abs()
+        .ceil() as i32;
 
-    if w % 8 != 0 {
-        w += 8 - (w % 8);
+    let mut h = 0;
+    let mut w = 0;
+    let mut lines = 0;
+
+    for line in input.text.lines() {
+        let (lw, _lh) = text_size(scale, &font, line);
+        w = w.max(lw);
+        h += line_height;
+        lines += 1;
     }
-
-    println!("text_image: result size {}x{}", w, h);
+    w += 1;
+    if w % 16 != 0 {
+        w += 16 - (w % 16);
+    }
+    println!("text_image: result size {}x{}, {} lines", w, h, lines);
 
     let mut image: image::ImageBuffer<Luma<u8>, Vec<u8>> = GrayImage::new(w as _, h as _);
 
-    draw_text_mut(&mut image, Luma([255u8]), 0, 0, scale, &font, &input.text);
+    let mut luma = 0xFF;
+    if input.inverse {
+        image.fill(0xFF);
+        luma = 0x00;
+    }
+
+    for (i, line) in input.text.lines().enumerate() {
+        // 1 px offset for blending
+        draw_text_mut(
+            &mut image,
+            Luma([luma]),
+            1,
+            line_height * (i as i32),
+            scale,
+            &font,
+            &line,
+        );
+    }
 
     let raw = image.into_raw();
+
+    // convert from 8-bit grayscale to 1-bit compressed bytes
+    let raw: Vec<u8> = raw
+        .chunks(2)
+        .map(|ch| (ch[1] >> 4) | (ch[0] & 0xF0))
+        .collect();
 
     let raw_bytes = Lit::ByteStr(LitByteStr::new(&raw, proc_macro2::Span::call_site()));
 

@@ -13,4 +13,7 @@ fn main() {
     let raw_image = ImageRaw::<Gray8>::new(raw, w);
 
     println!("=> {:#?}", raw_image);
+
+    println!("image size {}", w * h);
+    println!("bytes size {}", raw.len());
 }
