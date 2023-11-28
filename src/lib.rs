@@ -69,10 +69,28 @@ impl Parse for TextImageOptions {
     }
 }
 
+/// Generate a text image.
+///
+/// Usage:
+///
+/// ```rust
+/// use text_image::text_image;
+///
+/// use embedded_graphics::{image::ImageRaw, pixelcolor::Gray8};
+///
+/// fn main() {
+///   let (w, h, raw) = text_image!(
+///     text = "Hello, world!哈哈这样也行",
+///     font = "LXGWWenKaiScreen.ttf",
+///     font_size = 48.0,
+///   );
+/// }
+///
+/// ````
 #[proc_macro]
 pub fn text_image(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as TextImageOptions);
-    println!("text_image {:#?}", input);
+    println!("text_image: {:#?}", input);
 
     let font = std::fs::read(input.font).unwrap();
     let font = Font::try_from_vec(font).unwrap();
@@ -88,7 +106,7 @@ pub fn text_image(input: TokenStream) -> TokenStream {
         w += 8 - (w % 8);
     }
 
-    println!("text_image: render text size: {}x{}", w, h);
+    println!("text_image: result size {}x{}", w, h);
 
     let mut image: image::ImageBuffer<Luma<u8>, Vec<u8>> = GrayImage::new(w as _, h as _);
 
