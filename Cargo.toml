@@ -1,0 +1,27 @@
+[package]
+name = "text-image"
+version = "0.1.0"
+edition = "2021"
+authors = ["Andelf <andelf@gmail.com>"]
+repository = "https://github.com/andelf/text-image"
+documentation = "https://docs.rs/text-image"
+homepage = "https://github.com/andelf/text-image"
+categories = []
+description = "A proc-macro to generate raw image from text and a font file, for embedded-graphics."
+keywords = ["embedded-graphcs", "image", "text", "proc-macro"]
+readme = "README.md"
+license = "MIT/Apache-2.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+image = "0.24.7"
+imageproc = "0.23.0"
+rusttype = "0.9.3"
+proc-macro2 = "1.0.70"
+quote = "1.0.33"
+syn = { version = "2.0.39", features = ["extra-traits", "full", "parsing"] }
+
+[workspace]
+members = ["demo"]
