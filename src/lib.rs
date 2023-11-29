@@ -1,5 +1,3 @@
-#![feature(proc_macro_diagnostic)]
-
 use image::{GrayImage, Luma};
 use imageproc::drawing::{draw_text_mut, text_size};
 use proc_macro::TokenStream;
@@ -104,16 +102,10 @@ impl Parse for TextImageOptions {
 
         // check required
         if opts.text.is_empty() {
-            return Err(syn::Error::new_spanned(
-                "text",
-                "required option `text` is missing",
-            ));
+            return Err(syn::Error::new_spanned("text", "required option `text` is missing"));
         }
         if opts.font.is_empty() {
-            return Err(syn::Error::new_spanned(
-                "font",
-                "required option `font` is missing",
-            ));
+            return Err(syn::Error::new_spanned("font", "required option `font` is missing"));
         }
 
         Ok(opts)
