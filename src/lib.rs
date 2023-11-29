@@ -114,7 +114,7 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as TextImageOptions);
     println!("text_image: {:#?}", input);
 
-    let font_raw = std::fs::read(input.font).unwrap();
+    let font_raw = std::fs::read(input.font).expect("Can not read font file");
     let font = Font::try_from_vec(font_raw).unwrap();
 
     let scale = Scale {
