@@ -14,6 +14,7 @@ struct TextImageOptions {
     font: String,
     font_size: f32,
     inverse: bool,
+    line_spacing: i32,
 }
 
 impl Parse for TextImageOptions {
@@ -23,6 +24,7 @@ impl Parse for TextImageOptions {
             font: "".to_string(),
             font_size: 16.0,
             inverse: false,
+            line_spacing: 0,
         };
 
         loop {
@@ -68,6 +70,21 @@ impl Parse for TextImageOptions {
 
                     opts.font_size = font_size;
                 }
+                "line_spacing" => {
+                    input.parse::<Token![=]>()?;
+                    let line_spacing: Lit = input.parse()?;
+
+                    let line_spacing = if let Lit::Int(line_spacing) = &line_spacing {
+                        line_spacing.base10_parse()?
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            line_spacing,
+                            "expected a integer literal",
+                        ));
+                    };
+
+                    opts.line_spacing = line_spacing;
+                }
                 "inverse" => {
                     opts.inverse = true;
                 }
@@ -83,6 +100,20 @@ impl Parse for TextImageOptions {
             if input.is_empty() {
                 break;
             }
+        }
+
+        // check required
+        if opts.text.is_empty() {
+            return Err(syn::Error::new_spanned(
+                "text",
+                "required option `text` is missing",
+            ));
+        }
+        if opts.font.is_empty() {
+            return Err(syn::Error::new_spanned(
+                "font",
+                "required option `font` is missing",
+            ));
         }
 
         Ok(opts)
@@ -111,15 +142,15 @@ impl Parse for TextImageOptions {
 /// ````
 #[proc_macro]
 pub fn text_image(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as TextImageOptions);
-    println!("text_image: {:#?}", input);
+    let opts = parse_macro_input!(input as TextImageOptions);
+    println!("text_image: {:#?}", opts);
 
-    let font_raw = std::fs::read(input.font).expect("Can not read font file");
+    let font_raw = std::fs::read(opts.font).expect("Can not read font file");
     let font = Font::try_from_vec(font_raw).unwrap();
 
     let scale = Scale {
-        x: input.font_size,
-        y: input.font_size,
+        x: opts.font_size,
+        y: opts.font_size,
     };
 
     let metric = font.v_metrics(scale);
@@ -131,13 +162,15 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     let mut w = 0;
     let mut lines = 0;
 
-    for line in input.text.lines() {
+    for line in opts.text.lines() {
         let (lw, _lh) = text_size(scale, &font, line);
         w = w.max(lw);
         h += line_height;
         lines += 1;
     }
     w += 1;
+    h += opts.line_spacing as i32 * (lines - 1);
+
     if w % 16 != 0 {
         w += 16 - (w % 16);
     }
@@ -146,18 +179,18 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     let mut image: image::ImageBuffer<Luma<u8>, Vec<u8>> = GrayImage::new(w as _, h as _);
 
     let mut luma = 0xFF;
-    if input.inverse {
+    if opts.inverse {
         image.fill(0xFF);
         luma = 0x00;
     }
 
-    for (i, line) in input.text.lines().enumerate() {
+    for (i, line) in opts.text.lines().enumerate() {
         // 1 px offset for blending
         draw_text_mut(
             &mut image,
             Luma([luma]),
             1,
-            line_height * (i as i32),
+            (line_height + opts.line_spacing) * (i as i32),
             scale,
             &font,
             &line,
