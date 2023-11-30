@@ -13,6 +13,8 @@ struct TextImageOptions {
     font_size: f32,
     inverse: bool,
     line_spacing: i32,
+    // 2, 4, or 8
+    gray_depth: i32,
 }
 
 impl Parse for TextImageOptions {
@@ -23,6 +25,7 @@ impl Parse for TextImageOptions {
             font_size: 16.0,
             inverse: false,
             line_spacing: 0,
+            gray_depth: 1,
         };
 
         loop {
@@ -86,6 +89,15 @@ impl Parse for TextImageOptions {
                 "inverse" => {
                     opts.inverse = true;
                 }
+                "Gray2" => {
+                    opts.gray_depth = 2;
+                }
+                "Gray4" => {
+                    opts.gray_depth = 4;
+                }
+                "Gray8" => {
+                    opts.gray_depth = 8;
+                }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         name,
@@ -146,9 +158,11 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     };
 
     let metric = font.v_metrics(scale);
+    println!("metric: {:#?}", metric);
     let line_height = (metric.ascent - metric.descent + metric.line_gap)
         .abs()
         .ceil() as i32;
+    println!("line_height: {}", line_height);
 
     let mut h = 0;
     let mut w = 0;
@@ -156,6 +170,7 @@ pub fn text_image(input: TokenStream) -> TokenStream {
 
     for line in opts.text.lines() {
         let (lw, _lh) = text_size(scale, &font, line);
+        println!("lh => {}", _lh);
         w = w.max(lw);
         h += line_height;
         lines += 1;
@@ -163,8 +178,9 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     w += 1;
     h += opts.line_spacing as i32 * (lines - 1);
 
-    if w % 16 != 0 {
-        w += 16 - (w % 16);
+    // align to byte
+    if w / opts.gray_depth % 8 != 0 {
+        w += opts.gray_depth as i32 * (8 - (w / opts.gray_depth % 8));
     }
     println!("text_image: result size {}x{}, {} lines", w, h, lines);
 
@@ -182,7 +198,7 @@ pub fn text_image(input: TokenStream) -> TokenStream {
             &mut image,
             Luma([luma]),
             1,
-            (line_height + opts.line_spacing) * (i as i32),
+            (line_height + opts.line_spacing) * (i as i32) - 1,
             scale,
             &font,
             &line,
@@ -191,11 +207,42 @@ pub fn text_image(input: TokenStream) -> TokenStream {
 
     let raw = image.into_raw();
 
+    // convert depth
+    let raw: Vec<u8> = match opts.gray_depth {
+        8 => raw,
+        4 => raw
+            .chunks(2)
+            .map(|ch| (ch[1] >> 4) | (ch[0] & 0xF0))
+            .collect(),
+        2 => {
+            let mut ret = Vec::with_capacity(raw.len() / 4);
+            for ch in raw.chunks(4) {
+                ret.push(
+                    (ch[3] >> 6) | ((ch[2] >> 4) & 0x0C) | ((ch[1] >> 2) & 0x30) | (ch[0] & 0xC0),
+                );
+            }
+            ret
+        }
+        1 => {
+            let mut ret = Vec::with_capacity(raw.len() / 8);
+            for ch in raw.chunks(8) {
+                ret.push(
+                    (ch[7] >> 7)
+                        | ((ch[6] >> 6) & 0x02)
+                        | ((ch[5] >> 5) & 0x04)
+                        | ((ch[4] >> 4) & 0x08)
+                        | ((ch[3] >> 3) & 0x10)
+                        | ((ch[2] >> 2) & 0x20)
+                        | ((ch[1] >> 1) & 0x40)
+                        | (ch[0] & 0x80),
+                );
+            }
+            ret
+        }
+        _ => unreachable!(),
+    };
+
     // convert from 8-bit grayscale to 1-bit compressed bytes
-    let raw: Vec<u8> = raw
-        .chunks(2)
-        .map(|ch| (ch[1] >> 4) | (ch[0] & 0xF0))
-        .collect();
 
     let raw_bytes = Lit::ByteStr(LitByteStr::new(&raw, proc_macro2::Span::call_site()));
 
