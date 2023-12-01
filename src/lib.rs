@@ -1,4 +1,4 @@
-use image::{GrayImage, Luma};
+use image::{GenericImageView, GrayImage, Luma, Rgb};
 use imageproc::drawing::{draw_text_mut, text_size};
 use proc_macro::TokenStream;
 use quote::quote;
@@ -139,6 +139,7 @@ impl Parse for TextImageOptions {
 ///     font = "LXGWWenKaiScreen.ttf",
 ///     font_size = 48.0,
 ///     inverse,
+///     Gray4,
 ///   );
 ///   let raw_image = ImageRaw::<Gray8>::new(raw, w);
 /// }
@@ -158,11 +159,9 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     };
 
     let metric = font.v_metrics(scale);
-    println!("metric: {:#?}", metric);
     let line_height = (metric.ascent - metric.descent + metric.line_gap)
         .abs()
         .ceil() as i32;
-    println!("line_height: {}", line_height);
 
     let mut h = 0;
     let mut w = 0;
@@ -179,8 +178,8 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     h += opts.line_spacing as i32 * (lines - 1);
 
     // align to byte
-    if w / opts.gray_depth % 8 != 0 {
-        w += opts.gray_depth as i32 * (8 - (w / opts.gray_depth % 8));
+    if w % 8 != 0 {
+        w = (w / 8 + 1) * 8;
     }
     println!("text_image: result size {}x{}, {} lines", w, h, lines);
 
@@ -250,6 +249,163 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     let h = h as u32;
 
     // TODO: binary support https://github.com/image-rs/image/issues/640
+
+    let expanded = quote! {
+        (#w, #h, #raw_bytes)
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[derive(Debug)]
+struct MonochromeImageOptions {
+    image: String,
+    palette: Vec<u32>,
+    /// index of the channel to use
+    channel: u8,
+}
+
+impl MonochromeImageOptions {
+    fn map_palette(&self, c: &Rgb<u8>) -> u8 {
+        let mut min = 0;
+        let mut min_dist = 0x7FFF_FFFF;
+        for (i, p) in self.palette.iter().enumerate() {
+            let dist = (c.0[0] as i32 - (p >> 16) as i32).pow(2)
+                + (c.0[1] as i32 - ((p >> 8) & 0xFF) as i32).pow(2)
+                + (c.0[2] as i32 - (p & 0xFF) as i32).pow(2);
+            if dist < min_dist {
+                min_dist = dist;
+                min = i;
+            }
+        }
+        min as u8
+    }
+}
+
+impl Parse for MonochromeImageOptions {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let mut opts = MonochromeImageOptions {
+            image: "".to_string(),
+            palette: vec![0x000000, 0xFFFFFF, 0xFF0000],
+            channel: 0,
+        };
+
+        let name: Lit = input.parse()?;
+
+        let image = if let Lit::Str(image) = &name {
+            image.value()
+        } else {
+            return Err(syn::Error::new_spanned("image", "expected a string literal"));
+        };
+        opts.image = image;
+
+        while let Ok(_) = input.parse::<Token![,]>() {
+            if input.is_empty() {
+                break;
+            }
+
+            let name: Ident = input.parse()?;
+
+            match &*name.to_string() {
+                "channel" => {
+                    input.parse::<Token![=]>()?;
+                    let channel: Lit = input.parse()?;
+
+                    let channel = if let Lit::Int(channel) = &channel {
+                        channel.base10_parse()?
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            channel,
+                            "expected a integer literal",
+                        ));
+                    };
+
+                    opts.channel = channel;
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "expected `palette` or `channel`",
+                    ));
+                }
+            }
+        }
+
+        Ok(opts)
+    }
+}
+
+struct BWR;
+
+impl image::imageops::colorops::ColorMap for BWR {
+    type Color = Rgb<u8>;
+
+    fn index_of(&self, color: &Self::Color) -> usize {
+        let palette = vec![0x000000, 0xFFFFFF, 0xFF0000];
+        let mut min = 0;
+        let mut min_dist = 0x7FFF_FFFF;
+        for (i, p) in palette.iter().enumerate() {
+            let dist = (color.0[0] as i32 - (p >> 16) as i32).pow(2)
+                + (color.0[1] as i32 - ((p >> 8) & 0xFF) as i32).pow(2)
+                + (color.0[2] as i32 - (p & 0xFF) as i32).pow(2);
+            if dist < min_dist {
+                min_dist = dist;
+                min = i;
+            }
+        }
+        min
+    }
+    fn map_color(&self, color: &mut Self::Color) {
+        let idx = self.index_of(color);
+        let palette =
+            [
+                Rgb([0x00, 0x00, 0x00]),
+                Rgb([0xFF, 0xFF, 0xFF]),
+                Rgb([0xFF, 0x00, 0x00]),
+            ];
+        *color = palette[idx];
+    }
+}
+
+#[proc_macro]
+pub fn monochrome_image(input: TokenStream) -> TokenStream {
+    let opts = parse_macro_input!(input as MonochromeImageOptions);
+    println!("text_image: {:#?}", opts);
+
+    let im = image::open(&opts.image).expect("Can not read image file");
+    let (mut w, h) = im.dimensions();
+
+    let mut im = im.to_rgb8();
+
+    // Floyd-Steinberg dithering
+    image::imageops::colorops::dither(&mut im, &BWR);
+
+    let mut ret = vec![];
+
+    // convert each 8 pixel to a compressed byte
+    for (y, row) in im.enumerate_rows() {
+        let mut n = 0u8;
+        for (x, (_, _, px)) in row.enumerate() {
+            println!("{}x{}: {:?}", x, y, px);
+            let ix = opts.map_palette(px);
+            if ix == opts.channel {
+                n |= 1 << (7 - x % 8);
+            }
+            if x % 8 == 7 {
+                println!("=> {}", n);
+                ret.push(n);
+                n = 0;
+            }
+        }
+        if w % 8 != 0 {
+            println!("=> {}", n);
+            ret.push(n);
+        }
+    }
+
+    w = (w / 8 + if w % 8 != 0 { 1 } else { 0 }) * 8;
+
+    let raw_bytes = Lit::ByteStr(LitByteStr::new(&ret, proc_macro2::Span::call_site()));
 
     let expanded = quote! {
         (#w, #h, #raw_bytes)
