@@ -1,3 +1,5 @@
+#![feature(iter_array_chunks)]
+
 use image::{GenericImageView, GrayImage, Luma, Rgb};
 use imageproc::drawing::{draw_text_mut, text_size};
 use proc_macro::TokenStream;
@@ -337,6 +339,24 @@ impl Parse for MonochromeImageOptions {
 
 struct BWR;
 
+impl BWR {
+    fn map_palette(&self, c: &Rgb<u8>) -> u8 {
+        let palette = vec![0x000000, 0xFFFFFF, 0xFF0000];
+        let mut min = 0;
+        let mut min_dist = 0x7FFF_FFFF;
+        for (i, p) in palette.iter().enumerate() {
+            let dist = (c.0[0] as i32 - (p >> 16) as i32).pow(2)
+                + (c.0[1] as i32 - ((p >> 8) & 0xFF) as i32).pow(2)
+                + (c.0[2] as i32 - (p & 0xFF) as i32).pow(2);
+            if dist < min_dist {
+                min_dist = dist;
+                min = i;
+            }
+        }
+        min as u8
+    }
+}
+
 impl image::imageops::colorops::ColorMap for BWR {
     type Color = Rgb<u8>;
 
@@ -387,7 +407,7 @@ pub fn monochrome_image(input: TokenStream) -> TokenStream {
         let mut n = 0u8;
         for (x, (_, _, px)) in row.enumerate() {
             println!("{}x{}: {:?}", x, y, px);
-            let ix = opts.map_palette(px);
+            let ix = BWR.map_palette(px);
             if ix == opts.channel {
                 n |= 1 << (7 - x % 8);
             }
@@ -404,6 +424,93 @@ pub fn monochrome_image(input: TokenStream) -> TokenStream {
     }
 
     w = (w / 8 + if w % 8 != 0 { 1 } else { 0 }) * 8;
+
+    let raw_bytes = Lit::ByteStr(LitByteStr::new(&ret, proc_macro2::Span::call_site()));
+
+    let expanded = quote! {
+        (#w, #h, #raw_bytes)
+    };
+
+    TokenStream::from(expanded)
+}
+
+struct BWYR;
+
+impl BWYR {
+    fn map_palette(&self, c: &Rgb<u8>) -> u8 {
+        let palette = vec![0x000000, 0xFFFFFF, 0xFF0000, 0xFFFF00];
+        let mut min = 0;
+        let mut min_dist = 0x7FFF_FFFF;
+        for (i, p) in palette.iter().enumerate() {
+            let dist = (c.0[0] as i32 - (p >> 16) as i32).pow(2)
+                + (c.0[1] as i32 - ((p >> 8) & 0xFF) as i32).pow(2)
+                + (c.0[2] as i32 - (p & 0xFF) as i32).pow(2);
+            if dist < min_dist {
+                min_dist = dist;
+                min = i;
+            }
+        }
+        min as u8
+    }
+}
+
+impl image::imageops::colorops::ColorMap for BWYR {
+    type Color = Rgb<u8>;
+
+    fn index_of(&self, color: &Self::Color) -> usize {
+        let palette = vec![0x000000, 0xFFFFFF, 0xFFFF00, 0xFF0000];
+        let mut min = 0;
+        let mut min_dist = 0x7FFF_FFFF;
+        for (i, p) in palette.iter().enumerate() {
+            let dist = (color.0[0] as i32 - (p >> 16) as i32).abs()
+                + (color.0[1] as i32 - ((p >> 8) & 0xFF) as i32).abs()
+                + (color.0[2] as i32 - (p & 0xFF) as i32).abs();
+            if dist < min_dist {
+                min_dist = dist;
+                min = i;
+            }
+        }
+        min
+    }
+    fn map_color(&self, color: &mut Self::Color) {
+        let idx = self.index_of(color);
+        let palette = [
+            Rgb([0x00, 0x00, 0x00]),
+            Rgb([0xFF, 0xFF, 0xFF]),
+            Rgb([0xFF, 0x00, 0x00]),
+            Rgb([0xFF, 0xFF, 0x00]),
+        ];
+        *color = palette[idx];
+    }
+}
+
+// for BWRY palette
+#[proc_macro]
+pub fn quadcolor_image(input: TokenStream) -> TokenStream {
+    let opts = parse_macro_input!(input as MonochromeImageOptions);
+    println!("text_image: {:#?}", opts);
+
+    let im = image::open(&opts.image).expect("Can not read image file");
+    let (w, h) = im.dimensions();
+
+    let mut im = im.to_rgb8();
+
+    // Floyd-Steinberg dithering
+    image::imageops::colorops::dither(&mut im, &BWYR);
+
+    let mut ret = vec![];
+
+    for pixels in im.pixels().array_chunks::<4>() {
+        let mut n = 0u8;
+        for pix in pixels {
+            let ix = BWYR.map_palette(pix);
+            if ix != 0 && ix != 1 && ix != 2 {
+                println!("ix => {}", ix);
+            }
+            n = (n << 2) | (ix & 0b11);
+        }
+        ret.push(n);
+    }
 
     let raw_bytes = Lit::ByteStr(LitByteStr::new(&ret, proc_macro2::Span::call_site()));
 
