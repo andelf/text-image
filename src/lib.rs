@@ -171,7 +171,7 @@ pub fn text_image(input: TokenStream) -> TokenStream {
 
     for line in opts.text.lines() {
         let (lw, _lh) = text_size(scale, &font, line);
-        println!("lh => {}", _lh);
+        // println!("lh => {}", _lh);
         w = w.max(lw);
         h += line_height;
         lines += 1;
@@ -260,36 +260,19 @@ pub fn text_image(input: TokenStream) -> TokenStream {
 }
 
 #[derive(Debug)]
-struct MonochromeImageOptions {
+struct ImageOptions {
     image: String,
-    palette: Vec<u32>,
     /// index of the channel to use
     channel: u8,
+    gray_depth: i32,
 }
 
-impl MonochromeImageOptions {
-    fn map_palette(&self, c: &Rgb<u8>) -> u8 {
-        let mut min = 0;
-        let mut min_dist = 0x7FFF_FFFF;
-        for (i, p) in self.palette.iter().enumerate() {
-            let dist = (c.0[0] as i32 - (p >> 16) as i32).pow(2)
-                + (c.0[1] as i32 - ((p >> 8) & 0xFF) as i32).pow(2)
-                + (c.0[2] as i32 - (p & 0xFF) as i32).pow(2);
-            if dist < min_dist {
-                min_dist = dist;
-                min = i;
-            }
-        }
-        min as u8
-    }
-}
-
-impl Parse for MonochromeImageOptions {
+impl Parse for ImageOptions {
     fn parse(input: ParseStream) -> Result<Self> {
-        let mut opts = MonochromeImageOptions {
+        let mut opts = ImageOptions {
             image: "".to_string(),
-            palette: vec![0x000000, 0xFFFFFF, 0xFF0000],
             channel: 0,
+            gray_depth: 1,
         };
 
         let name: Lit = input.parse()?;
@@ -323,6 +306,15 @@ impl Parse for MonochromeImageOptions {
                     };
 
                     opts.channel = channel;
+                }
+                "Gray2" => {
+                    opts.gray_depth = 2;
+                }
+                "Gray4" => {
+                    opts.gray_depth = 4;
+                }
+                "Gray8" => {
+                    opts.gray_depth = 8;
                 }
                 _ => {
                     return Err(syn::Error::new_spanned(
@@ -389,7 +381,7 @@ impl image::imageops::colorops::ColorMap for BWR {
 
 #[proc_macro]
 pub fn monochrome_image(input: TokenStream) -> TokenStream {
-    let opts = parse_macro_input!(input as MonochromeImageOptions);
+    let opts = parse_macro_input!(input as ImageOptions);
     println!("text_image: {:#?}", opts);
 
     let im = image::open(&opts.image).expect("Can not read image file");
@@ -487,7 +479,7 @@ impl image::imageops::colorops::ColorMap for BWYR {
 // for BWRY palette
 #[proc_macro]
 pub fn quadcolor_image(input: TokenStream) -> TokenStream {
-    let opts = parse_macro_input!(input as MonochromeImageOptions);
+    let opts = parse_macro_input!(input as ImageOptions);
     println!("text_image: {:#?}", opts);
 
     let im = image::open(&opts.image).expect("Can not read image file");
@@ -510,6 +502,52 @@ pub fn quadcolor_image(input: TokenStream) -> TokenStream {
             n = (n << 2) | (ix & 0b11);
         }
         ret.push(n);
+    }
+
+    let raw_bytes = Lit::ByteStr(LitByteStr::new(&ret, proc_macro2::Span::call_site()));
+
+    let expanded = quote! {
+        (#w, #h, #raw_bytes)
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[proc_macro]
+pub fn gray_image(input: TokenStream) -> TokenStream {
+    let opts = parse_macro_input!(input as ImageOptions);
+    println!("text_image: {:#?}", opts);
+
+    let im = image::open(&opts.image).expect("Can not read image file");
+    let (w, h) = im.dimensions();
+
+    let im = im.to_luma8();
+
+    let mut ret = vec![];
+
+    let steps_per_pixel = 8 / opts.gray_depth;
+    let shift_per_pixel =
+        match opts.gray_depth {
+            8 => 0,
+            4 => 4,
+            2 => 6,
+            1 => 7,
+            _ => unreachable!(),
+        };
+
+    let mut c = 0;
+    let mut n = 0u8;
+    for pixel in im.pixels() {
+        let val = pixel.0[0];
+
+        n = (n << opts.gray_depth) | (val >> shift_per_pixel);
+        c += 1;
+
+        if c == steps_per_pixel {
+            ret.push(n);
+            n = 0;
+            c = 0;
+        }
     }
 
     let raw_bytes = Lit::ByteStr(LitByteStr::new(&ret, proc_macro2::Span::call_site()));
