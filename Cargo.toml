@@ -16,12 +16,12 @@ license = "MIT/Apache-2.0"
 proc-macro = true
 
 [dependencies]
-image = "0.24.7"
-imageproc = "0.23.0"
-rusttype = "0.9.3"
-proc-macro2 = "1.0.70"
-quote = "1.0.33"
-syn = { version = "2.0.39", features = ["extra-traits", "full", "parsing"] }
+image = "0.25.2"
+imageproc = "0.25.0"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["extra-traits", "full", "parsing"] }
+ab_glyph = "0.2.28"
 
 [workspace]
 members = ["demo"]

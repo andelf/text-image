@@ -1,10 +1,10 @@
 #![feature(iter_array_chunks)]
 
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{GenericImageView, GrayImage, Luma, Rgb};
 use imageproc::drawing::{draw_text_mut, text_size};
 use proc_macro::TokenStream;
 use quote::quote;
-use rusttype::{Font, Scale};
 use syn::parse::{Parse, ParseStream, Result};
 use syn::{parse_macro_input, Ident, Lit, LitByteStr, Token};
 
@@ -116,10 +116,16 @@ impl Parse for TextImageOptions {
 
         // check required
         if opts.text.is_empty() {
-            return Err(syn::Error::new_spanned("text", "required option `text` is missing"));
+            return Err(syn::Error::new_spanned(
+                "text",
+                "required option `text` is missing",
+            ));
         }
         if opts.font.is_empty() {
-            return Err(syn::Error::new_spanned("font", "required option `font` is missing"));
+            return Err(syn::Error::new_spanned(
+                "font",
+                "required option `font` is missing",
+            ));
         }
 
         Ok(opts)
@@ -153,15 +159,16 @@ pub fn text_image(input: TokenStream) -> TokenStream {
     println!("text_image: {:#?}", opts);
 
     let font_raw = std::fs::read(opts.font).expect("Can not read font file");
-    let font = Font::try_from_vec(font_raw).unwrap();
+    let font = FontRef::try_from_slice(&font_raw).expect("Can not load font");
 
-    let scale = Scale {
+    let scale = PxScale {
         x: opts.font_size,
         y: opts.font_size,
     };
 
-    let metric = font.v_metrics(scale);
-    let line_height = (metric.ascent - metric.descent + metric.line_gap)
+    // let metric = font.v_metrics(scale);
+    let sfont = font.as_scaled(scale);
+    let line_height = (sfont.ascent() - sfont.descent() + sfont.line_gap())
         .abs()
         .ceil() as i32;
 
@@ -280,7 +287,10 @@ impl Parse for ImageOptions {
         let image = if let Lit::Str(image) = &name {
             image.value()
         } else {
-            return Err(syn::Error::new_spanned("image", "expected a string literal"));
+            return Err(syn::Error::new_spanned(
+                "image",
+                "expected a string literal",
+            ));
         };
         opts.image = image;
 
@@ -369,12 +379,11 @@ impl image::imageops::colorops::ColorMap for BWR {
     }
     fn map_color(&self, color: &mut Self::Color) {
         let idx = self.index_of(color);
-        let palette =
-            [
-                Rgb([0x00, 0x00, 0x00]),
-                Rgb([0xFF, 0xFF, 0xFF]),
-                Rgb([0xFF, 0x00, 0x00]),
-            ];
+        let palette = [
+            Rgb([0x00, 0x00, 0x00]),
+            Rgb([0xFF, 0xFF, 0xFF]),
+            Rgb([0xFF, 0x00, 0x00]),
+        ];
         *color = palette[idx];
     }
 }
@@ -398,19 +407,16 @@ pub fn monochrome_image(input: TokenStream) -> TokenStream {
     for (y, row) in im.enumerate_rows() {
         let mut n = 0u8;
         for (x, (_, _, px)) in row.enumerate() {
-            println!("{}x{}: {:?}", x, y, px);
             let ix = BWR.map_palette(px);
             if ix == opts.channel {
                 n |= 1 << (7 - x % 8);
             }
             if x % 8 == 7 {
-                println!("=> {}", n);
                 ret.push(n);
                 n = 0;
             }
         }
         if w % 8 != 0 {
-            println!("=> {}", n);
             ret.push(n);
         }
     }
@@ -513,6 +519,13 @@ pub fn quadcolor_image(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Load a image and compress it to grayscale image of specified depth.
+///
+/// ```
+/// let (w, h, img_raw) = text_image::gray_image!("pattern128x128.png", Gray4);
+/// let image: ImageRaw<Gray4, LittleEndian> = ImageRaw::new(img_raw, w);
+/// image.draw(&mut fb).unwrap();
+/// ```
 #[proc_macro]
 pub fn gray_image(input: TokenStream) -> TokenStream {
     let opts = parse_macro_input!(input as ImageOptions);
@@ -526,14 +539,13 @@ pub fn gray_image(input: TokenStream) -> TokenStream {
     let mut ret = vec![];
 
     let steps_per_pixel = 8 / opts.gray_depth;
-    let shift_per_pixel =
-        match opts.gray_depth {
-            8 => 0,
-            4 => 4,
-            2 => 6,
-            1 => 7,
-            _ => unreachable!(),
-        };
+    let shift_per_pixel = match opts.gray_depth {
+        8 => 0,
+        4 => 4,
+        2 => 6,
+        1 => 7,
+        _ => unreachable!(),
+    };
 
     let mut c = 0;
     let mut n = 0u8;
