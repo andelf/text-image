@@ -1,12 +1,12 @@
 [package]
 name = "text-image"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 authors = ["Andelf <andelf@gmail.com>"]
 repository = "https://github.com/andelf/text-image"
 documentation = "https://docs.rs/text-image"
 homepage = "https://github.com/andelf/text-image"
-categories = []
+categories = ["multimedia", "graphics", "rendering"]
 description = "A proc-macro to generate raw image from text and a font file, for embedded-graphics."
 keywords = ["embedded-graphcs", "image", "text", "proc-macro"]
 readme = "README.md"
