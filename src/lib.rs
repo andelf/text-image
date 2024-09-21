@@ -17,7 +17,7 @@ struct TextImageOptions {
     line_spacing: i32,
     // 2, 4, or 8
     gray_depth: i32,
-    // gamma < 1, darker, gamma > 1, lighter
+    // gamma < 1.0, darker, gamma > 1.0, lighter
     gamma: f32,
 }
 
@@ -306,7 +306,10 @@ struct ImageOptions {
     image: String,
     /// index of the channel to use
     channel: u8,
+    /// gray depth, 1, 2, 4, 8
     gray_depth: i32,
+    /// gamma correction
+    gamma: f32,
 }
 
 impl Parse for ImageOptions {
@@ -315,6 +318,7 @@ impl Parse for ImageOptions {
             image: "".to_string(),
             channel: 0,
             gray_depth: 1,
+            gamma: 1.0,
         };
 
         let name: Lit = input.parse()?;
@@ -351,6 +355,20 @@ impl Parse for ImageOptions {
                     };
 
                     opts.channel = channel;
+                }
+                "gamma" => {
+                    input.parse::<Token![=]>()?;
+                    let gamma: Lit = input.parse()?;
+
+                    let gamma = if let Lit::Float(gamma) = &gamma {
+                        gamma.base10_parse()?
+                    } else {
+                        return Err(syn::Error::new_spanned(gamma, "expected a float literal"));
+                    };
+                    if gamma <= 0.0 {
+                        return Err(syn::Error::new_spanned(gamma, "gamma must be positive"));
+                    }
+                    opts.gamma = gamma;
                 }
                 "Gray2" => {
                     opts.gray_depth = 2;
@@ -518,6 +536,10 @@ impl image::imageops::colorops::ColorMap for BWYR {
 }
 
 /// Image reading macro for BWYR palette
+///
+/// ```
+/// let (w, h, raw) = text_image::quadcolor_image!("./star-six2.png", channel = 1);
+/// ```
 #[proc_macro]
 pub fn quadcolor_image(input: TokenStream) -> TokenStream {
     let opts = parse_macro_input!(input as ImageOptions);
@@ -558,6 +580,8 @@ pub fn quadcolor_image(input: TokenStream) -> TokenStream {
 ///
 /// ```
 /// let (w, h, img_raw) = text_image::gray_image!("pattern128x128.png", Gray4);
+/// // or with gamma correction
+/// // let (w, h, img_raw) = text_image::gray_image!("pattern128x128.png", Gray4, gamma = 0.5);
 /// let image: ImageRaw<Gray4, LittleEndian> = ImageRaw::new(img_raw, w);
 /// image.draw(&mut fb).unwrap();
 /// ```
@@ -586,6 +610,9 @@ pub fn gray_image(input: TokenStream) -> TokenStream {
     let mut n = 0u8;
     for pixel in im.pixels() {
         let val = pixel.0[0];
+
+        // gamma correction
+        let val = ((val as f32 / 255.0).powf(opts.gamma) * 255.0) as u8;
 
         n = (n << opts.gray_depth) | (val >> shift_per_pixel);
         c += 1;
