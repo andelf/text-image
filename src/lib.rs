@@ -17,6 +17,8 @@ struct TextImageOptions {
     line_spacing: i32,
     // 2, 4, or 8
     gray_depth: i32,
+    // gamma < 1, darker, gamma > 1, lighter
+    gamma: f32,
 }
 
 impl Parse for TextImageOptions {
@@ -28,6 +30,7 @@ impl Parse for TextImageOptions {
             inverse: false,
             line_spacing: 0,
             gray_depth: 1,
+            gamma: 1.0,
         };
 
         loop {
@@ -88,6 +91,20 @@ impl Parse for TextImageOptions {
 
                     opts.line_spacing = line_spacing;
                 }
+                "gamma" => {
+                    input.parse::<Token![=]>()?;
+                    let gamma: Lit = input.parse()?;
+
+                    let gamma = if let Lit::Float(gamma) = &gamma {
+                        gamma.base10_parse()?
+                    } else {
+                        return Err(syn::Error::new_spanned(gamma, "expected a float literal"));
+                    };
+                    if gamma <= 0.0 {
+                        return Err(syn::Error::new_spanned(gamma, "gamma must be positive"));
+                    }
+                    opts.gamma = gamma;
+                }
                 "inverse" => {
                     opts.inverse = true;
                 }
@@ -133,6 +150,15 @@ impl Parse for TextImageOptions {
 }
 
 /// Generate a text image.
+///
+/// Parameters:
+/// - `text`: text to render
+/// - `font`: font file path
+/// - `font_size`: font size
+/// - `line_spacing`: line spacing
+/// - `gamma`: gamma correction, default 1.0, < 1.0 darker, > 1.0 lighter
+/// - `inverse`: inverse color
+/// - `gray_depth`: Gray2, Gray4, Gray8
 ///
 /// Usage:
 ///
@@ -213,7 +239,16 @@ pub fn text_image(input: TokenStream) -> TokenStream {
         );
     }
 
-    let raw = image.into_raw();
+    let mut raw = image.into_raw();
+
+    // gamma transform
+    if opts.gamma != 1.0 {
+        let gamma = opts.gamma;
+        for p in raw.iter_mut() {
+            let v = (*p as f32 / 255.0).powf(gamma) * 255.0;
+            *p = v as u8;
+        }
+    }
 
     // convert depth
     let raw: Vec<u8> = match opts.gray_depth {
@@ -482,7 +517,7 @@ impl image::imageops::colorops::ColorMap for BWYR {
     }
 }
 
-// for BWRY palette
+/// Image reading macro for BWYR palette
 #[proc_macro]
 pub fn quadcolor_image(input: TokenStream) -> TokenStream {
     let opts = parse_macro_input!(input as ImageOptions);
