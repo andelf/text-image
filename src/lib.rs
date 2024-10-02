@@ -457,7 +457,7 @@ pub fn monochrome_image(input: TokenStream) -> TokenStream {
     let mut ret = vec![];
 
     // convert each 8 pixel to a compressed byte
-    for (y, row) in im.enumerate_rows() {
+    for (_y, row) in im.enumerate_rows() {
         let mut n = 0u8;
         for (x, (_, _, px)) in row.enumerate() {
             let ix = BWR.map_palette(px);
